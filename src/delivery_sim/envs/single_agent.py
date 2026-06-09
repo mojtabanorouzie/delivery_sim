@@ -9,22 +9,24 @@ objects; the simulator then advances by ``decision_interval`` sim-seconds via
 ``Simulator.run_until``, processing every queued event in that window.  Reward
 comes from a swappable ``RewardFunction``; coverage-vs-cost tradeoffs live there.
 
-Observation vector  (``n_stores + 5`` float32, all in ``[0, 1]``):
+Observation
+-----------
+The shape and content of the observation vector are determined by the
+``ObservationSpec`` selected via ``config.observation_preset``.  The default
+preset is ``"standard"``, which reproduces the original hardcoded vector:
+
   obs[0 .. n-1]   coverage_radius[i] / max_coverage_radius
   obs[n]          interval delivery rate = delivered / (delivered+failed) this
                   step.  Sentinel 0.5 when no orders completed.
   obs[n+1]        interval failed rate   = failed / (delivered+failed) this
                   step.  Sentinel 0.0 when no orders completed.
-                  Sentinel non-collision proof: when orders exist,
-                  delivery_rate + failed_rate == 1.0 (they partition terminal
-                  orders); the sentinel pair sums to 0.5, which is unreachable
-                  from real data, so the two cases are always distinguishable.
   obs[n+2]        instantaneous busy-courier fraction = non-free couriers /
-                  total couriers at the end of the step window.  Live value,
-                  valid every step (no finalize needed).
+                  total couriers at the end of the step window.
   obs[n+3]        episode mean_delivery_time / horizon, clipped [0, 1]
   obs[n+4]        pending order count / max_pending, clipped [0, 1]
-                  where max_pending = max(1, demand_rate * decision_interval * 2)
+
+The ``observation_space`` is derived from the selected spec's ``bounds()``
+method, ensuring shape and bounds always match what ``observe()`` returns.
 
 Action space:  Box(low=0, high=max_coverage_radius, shape=(n_stores,), float32)
   Each element is the desired coverage_radius for the corresponding store
@@ -55,6 +57,9 @@ from gymnasium import spaces
 from delivery_sim.config.schema import ScenarioConfig
 from delivery_sim.engine.simulator import Simulator
 from delivery_sim.entities.order import OrderStatus
+from delivery_sim.envs.observations import (
+    ObservationSpec,  # noqa: F401 — triggers preset registration
+)
 from delivery_sim.metrics.collector import KPICollector
 from delivery_sim.registry import create
 from delivery_sim.render.headless import HeadlessRenderer
@@ -67,6 +72,10 @@ class DeliveryEnv(gym.Env[Any, Any]):
     One agent sets ``coverage_radius`` for every store at each decision step.
     The simulator advances by ``config.decision_interval`` sim-seconds between
     decisions, processing all events in that window.
+
+    The observation vector shape and bounds are determined by the
+    ``ObservationSpec`` named in ``config.observation_preset``.  Default is
+    ``"standard"``, which preserves the original hardcoded vector exactly.
     """
 
     metadata: dict[str, Any] = {"render_modes": ["human", "headless"]}
@@ -85,11 +94,11 @@ class DeliveryEnv(gym.Env[Any, Any]):
             shape=(n_stores,),
             dtype=np.float32,
         )
+
+        self._obs_spec: ObservationSpec = create("observation", config.observation_preset)
+        _low, _high = self._obs_spec.bounds(n_stores)
         self.observation_space: spaces.Space[Any] = spaces.Box(
-            low=np.float32(0.0),
-            high=np.float32(1.0),
-            shape=(n_stores + 5,),
-            dtype=np.float32,
+            low=_low, high=_high, dtype=np.float32
         )
 
         self._simulator = Simulator(config)
@@ -124,6 +133,9 @@ class DeliveryEnv(gym.Env[Any, Any]):
         If *seed* is provided it replaces ``config.seed`` for this episode,
         ensuring the (seed, action-sequence) pair fully determines the
         trajectory.  Subsequent calls with ``seed=None`` keep the last seed.
+
+        The ObservationSpec is rebuilt from the registry so that any
+        config change (including a seed-driven config swap) takes effect.
         """
         super().reset(seed=seed)
 
@@ -131,6 +143,11 @@ class DeliveryEnv(gym.Env[Any, Any]):
             new_cfg = self.config.model_copy(update={"seed": seed})
             self.config = new_cfg
             self._simulator.config = new_cfg
+
+        # Rebuild spec and space (cheap; guarantees config and space stay in sync).
+        self._obs_spec = create("observation", self.config.observation_preset)
+        _low, _high = self._obs_spec.bounds(self._n_stores)
+        self.observation_space = spaces.Box(low=_low, high=_high, dtype=np.float32)
 
         self._collector = KPICollector()
         self._simulator.attach_collector(self._collector)
@@ -237,61 +254,16 @@ class DeliveryEnv(gym.Env[Any, Any]):
         interval_failed: int,
         interval_total: int,
     ) -> np.ndarray:
-        """Build the flat float32 observation vector; all values in [0, 1].
-
-        Sentinel convention for interval-rate channels (interval_total == 0):
-          delivery_rate = 0.5,  failed_rate = 0.0   → sum = 0.5
-        Real rates always satisfy delivery_rate + failed_rate == 1.0
-        (they partition terminal orders: DELIVERED + FAILED == total_terminal).
-        A sum of 0.5 is therefore unreachable from real data — collision-free.
-        """
+        """Delegate observation construction to the selected ObservationSpec."""
         assert self._simulator.world is not None
-        world = self._simulator.world
-
-        # Per-store normalised coverage radius.
-        coverage = np.array(
-            [s.coverage_radius / self._max_r for s in world.stores],  # type: ignore[attr-defined]
-            dtype=np.float32,
+        assert self._collector is not None
+        return self._obs_spec.observe(
+            self._simulator.world,
+            self._collector,
+            interval_delivered,
+            interval_failed,
+            interval_total,
+            self._max_r,
+            self._max_pending,
+            self._horizon,
         )
-        coverage = np.clip(coverage, 0.0, 1.0)
-
-        # Interval delivery / failed rates.  Sentinel sums to 0.5; real data
-        # always sums to 1.0, so the two cases are unambiguously distinguishable.
-        if interval_total > 0:
-            interval_delivery_rate = float(interval_delivered) / interval_total
-            interval_failed_rate = float(interval_failed) / interval_total
-        else:
-            interval_delivery_rate = 0.5
-            interval_failed_rate = 0.0
-
-        # Instantaneous busy-courier fraction at step end.
-        # Live value derived from world.courier_phase; valid every step without
-        # requiring KPICollector.finalize().
-        busy = sum(1 for phase in world.courier_phase.values() if phase != "free")
-        busy_fraction = float(busy) / max(1, len(world.couriers))
-
-        # Episode mean delivery time (normalised by horizon).
-        mean_dt = (
-            float(self._collector.summary()["mean_delivery_time"])
-            if self._collector is not None
-            else 0.0
-        )
-        mean_dt_norm = float(
-            np.clip(mean_dt / self._horizon, 0.0, 1.0)
-        ) if self._horizon > 0.0 else 0.0
-
-        # Pending orders: created but not yet terminal.
-        pending = sum(1 for o in world.active_orders.values() if not o.is_terminal)
-        pending_norm = float(np.clip(pending / self._max_pending, 0.0, 1.0))
-
-        scalars = np.array(
-            [
-                interval_delivery_rate,
-                interval_failed_rate,
-                busy_fraction,
-                mean_dt_norm,
-                pending_norm,
-            ],
-            dtype=np.float32,
-        )
-        return np.concatenate([coverage, scalars]).astype(np.float32)

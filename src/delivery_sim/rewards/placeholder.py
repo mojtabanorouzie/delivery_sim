@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 
 
 @register("reward")
+@register("reward", name="sparse_delivery")
 class SparseDeliveryReward(RewardFunction):
     """Per-step reward: +1 per delivery, −0.5 per failed order this tick.
 

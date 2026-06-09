@@ -86,3 +86,7 @@ class ScenarioConfig(BaseModel):
         default=1000.0, gt=0,
         description="Action-space upper bound for per-store coverage_radius",
     )
+    observation_preset: str = Field(
+        default="standard",
+        description="Named ObservationSpec preset (see delivery_sim.envs.observations)",
+    )

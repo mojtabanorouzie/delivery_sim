@@ -54,6 +54,7 @@ class Order:
     status: OrderStatus = field(default=OrderStatus.CREATED)
     timestamps: dict[OrderStatus, float] = field(default_factory=dict)
     assigned_courier_id: str | None = None
+    delivery_cost: float = 0.0  # real courier-distance cost; set at terminal transition
 
     def __post_init__(self) -> None:
         if OrderStatus.CREATED not in self.timestamps:
