@@ -214,6 +214,48 @@ class Simulator:
         """
         raise NotImplementedError
 
+    def run_until(self, target_time: float) -> None:
+        """Advance the simulation to *target_time*, for use by RL env wrappers.
+
+        Boundary convention — strict less-than, consistent with the horizon
+        strict-< rule in ``run()``:
+
+        * Events with ``event.time < target_time`` are processed in this call.
+        * An event whose time equals *exactly* ``target_time`` is **not**
+          processed here; it stays queued and is picked up by the next
+          ``run_until`` window.  This guarantees every event is processed in
+          exactly one window, never zero or two.
+
+        After draining all eligible events the clock is pinned to
+        ``target_time`` via ``advance_to``, so callers always observe
+        ``clock.elapsed == target_time`` after each call, regardless of
+        whether any events fell inside the window.
+
+        Equivalence guarantee: N consecutive calls covering
+        ``[0, d), [d, 2d), …, [(N-1)d, Nd=horizon)`` process exactly the
+        same set of events as ``run()`` to the same horizon — same order,
+        same timestamps, same KPI outcomes — because both use the strict-<
+        convention and the underlying priority queue is never cleared between
+        calls.
+
+        Caller responsibilities:
+        - Call ``reset()`` exactly once before the first ``run_until`` in an
+          episode.
+        - Call ``collector.finalize(num_couriers, horizon)`` once at episode
+          end; ``run_until`` never calls it.
+        """
+        assert self.world is not None, "call reset() before run_until()"
+        while not self.event_queue.is_empty():
+            next_ev = self.event_queue.peek()
+            assert next_ev is not None
+            if next_ev.time >= target_time:
+                break
+            event = self.event_queue.pop()
+            self.clock.advance_to(event.time)
+            self._dispatch_event(event)
+        if self.clock.elapsed < target_time:
+            self.clock.advance_to(target_time)
+
     def run(
         self,
         consumer: SnapshotConsumer | None = None,

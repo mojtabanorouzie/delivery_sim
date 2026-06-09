@@ -78,3 +78,11 @@ class ScenarioConfig(BaseModel):
     )
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     reward: RewardConfig = Field(default_factory=RewardConfig)
+    decision_interval: float = Field(
+        default=100.0, gt=0,
+        description="Env step size in sim-seconds (how often the agent acts)",
+    )
+    max_coverage_radius: float = Field(
+        default=1000.0, gt=0,
+        description="Action-space upper bound for per-store coverage_radius",
+    )
