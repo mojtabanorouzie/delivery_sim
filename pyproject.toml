@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "delivery-sim"
+version = "0.1.0"
+description = "Extensible, reproducible simulation of e-commerce last-mile delivery for RL research"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "gymnasium>=0.29",
+    "pettingzoo>=1.24",
+    "pydantic>=2.0",
+    "numpy>=1.26",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+    "mypy>=1.10",
+    "types-PyYAML>=6.0",
+]
+render = [
+    "pygame>=2.5",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/delivery_sim"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+src = ["src"]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["delivery_sim"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+mypy_path = "src"
+exclude = ["examples/"]
+
+[[tool.mypy.overrides]]
+module = ["gymnasium.*", "pettingzoo.*", "pygame.*"]
+ignore_missing_imports = true

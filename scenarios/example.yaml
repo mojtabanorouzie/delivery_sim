@@ -1,0 +1,33 @@
+name: example_scenario
+seed: 42
+dt: 1.0
+max_steps: 1000
+
+world:
+  width: 1000.0
+  height: 1000.0
+
+stores:
+  - name: warehouse_a
+    x: 200.0
+    y: 200.0
+    capacity: 20
+  - name: warehouse_b
+    x: 800.0
+    y: 600.0
+    capacity: 15
+
+couriers:
+  - courier_type: BikeCourier
+    count: 3
+    speed: 1.5
+
+demand:
+  generator_type: PoissonDemandGenerator
+  rate: 0.5
+
+routing:
+  model_type: euclidean
+
+reward:
+  function_type: SparseDeliveryReward
