@@ -115,6 +115,7 @@ class Simulator:
         assertion at the end of ``run()`` catches any omission.
         """
         cost = self._order_leg_cost.pop(order.order_id, 0.0)
+        order.delivery_cost = cost
         if self._collector is not None:
             if order.status == OrderStatus.DELIVERED:
                 self._collector.on_order_delivered(order, sim_time, cost)
