@@ -141,10 +141,10 @@ class MinimalObservation(ObservationSpec):
         max_pending: float,  # noqa: ARG002
         horizon: float,  # noqa: ARG002
     ) -> np.ndarray:
+        """Return n + 1 float32 vector: normalised coverage + interval delivery rate."""
         coverage = np.clip(
             np.array(
-                [s.coverage_radius / max_r for s in world.stores],  # type: ignore[attr-defined]
-                dtype=np.float32,
+                [s.coverage_radius / max_r for s in world.stores],                  dtype=np.float32,
             ),
             0.0,
             1.0,
@@ -157,6 +157,7 @@ class MinimalObservation(ObservationSpec):
         return np.append(coverage, np.float32(delivery_rate)).astype(np.float32)
 
     def bounds(self, n_stores: int) -> tuple[np.ndarray, np.ndarray]:
+        """Return ([0]*n+1, [1]*n+1) Box bounds."""
         n = n_stores + 1
         return np.zeros(n, dtype=np.float32), np.ones(n, dtype=np.float32)
 
@@ -192,10 +193,10 @@ class StandardObservation(ObservationSpec):
         max_pending: float,
         horizon: float,
     ) -> np.ndarray:
+        """Return n + 5 float32 vector: coverage + rates + busy + mean_dt + pending."""
         coverage = np.clip(
             np.array(
-                [s.coverage_radius / max_r for s in world.stores],  # type: ignore[attr-defined]
-                dtype=np.float32,
+                [s.coverage_radius / max_r for s in world.stores],                  dtype=np.float32,
             ),
             0.0,
             1.0,
@@ -226,6 +227,7 @@ class StandardObservation(ObservationSpec):
         return np.concatenate([coverage, scalars]).astype(np.float32)
 
     def bounds(self, n_stores: int) -> tuple[np.ndarray, np.ndarray]:
+        """Return ([0]*n+5, [1]*n+5) Box bounds."""
         n = n_stores + 5
         return np.zeros(n, dtype=np.float32), np.ones(n, dtype=np.float32)
 
@@ -262,10 +264,10 @@ class OperationalObservation(ObservationSpec):
         max_pending: float,
         horizon: float,  # noqa: ARG002
     ) -> np.ndarray:
+        """Return n + 3 float32 vector: coverage + failed rate + busy + pending."""
         coverage = np.clip(
             np.array(
-                [s.coverage_radius / max_r for s in world.stores],  # type: ignore[attr-defined]
-                dtype=np.float32,
+                [s.coverage_radius / max_r for s in world.stores],                  dtype=np.float32,
             ),
             0.0,
             1.0,
@@ -288,5 +290,6 @@ class OperationalObservation(ObservationSpec):
         return np.concatenate([coverage, scalars]).astype(np.float32)
 
     def bounds(self, n_stores: int) -> tuple[np.ndarray, np.ndarray]:
+        """Return ([0]*n+3, [1]*n+3) Box bounds."""
         n = n_stores + 3
         return np.zeros(n, dtype=np.float32), np.ones(n, dtype=np.float32)

@@ -81,6 +81,15 @@ class DeliveryEnv(gym.Env[Any, Any]):
     metadata: dict[str, Any] = {"render_modes": ["human", "headless"]}
 
     def __init__(self, config: ScenarioConfig, render_mode: str = "headless") -> None:
+        """Build action/observation spaces and attach simulator components.
+
+        Args:
+            config:      Validated scenario configuration.  Determines n_stores,
+                         max_coverage_radius, decision_interval, and which
+                         ObservationSpec / RewardFunction are instantiated.
+            render_mode: ``"headless"`` (default, training) or ``"human"``
+                         (reserved for a future pygame renderer).
+        """
         super().__init__()
         self.config = config
         self.render_mode = render_mode
@@ -181,7 +190,7 @@ class DeliveryEnv(gym.Env[Any, Any]):
             np.asarray(action, dtype=np.float32), 0.0, self._max_r
         )
         for i, store in enumerate(world.stores):
-            store.coverage_radius = float(clamped[i])  # type: ignore[attr-defined]
+            store.coverage_radius = float(clamped[i])
 
         # Snapshot which orders are already terminal before this window.
         before_terminal: frozenset[str] = frozenset(

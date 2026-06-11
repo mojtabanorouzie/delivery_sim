@@ -48,6 +48,17 @@ class Store(ABC):
         """Y coordinate in the world."""
         raise NotImplementedError
 
+    @property
+    @abstractmethod
+    def coverage_radius(self) -> float:
+        """Current service radius in world-units. Non-negative by convention."""
+        raise NotImplementedError
+
+    @coverage_radius.setter
+    @abstractmethod
+    def coverage_radius(self, value: float) -> None:
+        raise NotImplementedError
+
     @abstractmethod
     def covers(self, point_x: float, point_y: float, routing: RoutingModel) -> bool:
         """Return True iff (point_x, point_y) lies within this store's coverage area.
@@ -105,8 +116,7 @@ class BuiltinStore(Store):
         self._y = y
         self.capacity = capacity
         self.prep_time = prep_time
-        #: Service radius in world-units. Non-negative by convention; see class docstring.
-        self.coverage_radius = coverage_radius
+        self._coverage_radius: float = coverage_radius
         self._active_orders: dict[str, float] = {}
 
     @property
@@ -121,13 +131,21 @@ class BuiltinStore(Store):
     def y(self) -> float:
         return self._y
 
+    @property
+    def coverage_radius(self) -> float:
+        return self._coverage_radius
+
+    @coverage_radius.setter
+    def coverage_radius(self, value: float) -> None:
+        self._coverage_radius = value
+
     def covers(self, point_x: float, point_y: float, routing: RoutingModel) -> bool:
         """Return True iff routing distance from store to (point_x, point_y) is
         <= coverage_radius (inclusive boundary).
 
         Returns False for all inputs when coverage_radius is negative.
         """
-        return routing.distance(self._x, self._y, point_x, point_y) <= self.coverage_radius
+        return routing.distance(self._x, self._y, point_x, point_y) <= self._coverage_radius
 
     def can_prepare(self, order_id: str) -> bool:
         """Return True iff active-order count is strictly below capacity.

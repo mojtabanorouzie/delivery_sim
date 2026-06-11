@@ -10,6 +10,7 @@ dist/
 # Virtual environments
 .venv/
 venv/
+venv*/
 env/
 
 # Tool caches
@@ -20,6 +21,9 @@ env/
 # Coverage
 .coverage
 htmlcov/
+
+# Generated outputs (trained models, plots, CSVs)
+outputs/
 
 # OS / IDE
 .DS_Store

@@ -18,4 +18,12 @@ __all__ = [
     "CourierSnapshot",
     "OrderSnapshot",
     "HeadlessRenderer",
+    "PygameRenderer",
 ]
+
+
+def __getattr__(name: str) -> object:
+    if name == "PygameRenderer":
+        from delivery_sim.render.pygame_renderer import PygameRenderer  # noqa: PLC0415
+        return PygameRenderer
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
