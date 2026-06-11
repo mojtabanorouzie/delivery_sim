@@ -67,6 +67,7 @@ class OptimizedDeliveryReward(RewardFunction):
         failure_penalty: float = 1.0,
         w_cost: float = 0.01,
     ) -> None:
+        """See class docstring for parameter descriptions."""
         self.target_time = target_time
         self.grace_period = grace_period
         self.failure_penalty = failure_penalty

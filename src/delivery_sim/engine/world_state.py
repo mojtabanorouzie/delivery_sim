@@ -67,7 +67,7 @@ class WorldState:
         )
 
         store_snaps = tuple(
-            StoreSnapshot(store_id=s.store_id, x=s.x, y=s.y)
+            StoreSnapshot(store_id=s.store_id, x=s.x, y=s.y, coverage_radius=s.coverage_radius)
             for s in sorted(self.stores, key=lambda s: s.store_id)
         )
         courier_snaps = tuple(

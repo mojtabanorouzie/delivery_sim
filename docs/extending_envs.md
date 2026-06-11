@@ -1,5 +1,9 @@
 # Extending the RL Interface: Custom Observations and Rewards
 
+> **Superseded.** This file has been replaced by [extending.md](extending.md),
+> which covers all six extension points: ObservationSpec, RewardFunction, Store,
+> Courier, DemandGenerator, and RoutingModel.
+
 Adding a new observation layout or reward signal is a **one-file change**.
 You register a class, name it in config, and the env picks it up automatically —
 no edits to `DeliveryEnv` or any other env file.
@@ -158,7 +162,7 @@ No edits to `DeliveryEnv`, `single_agent.py`, or any other env file.
 ## 4. Built-in presets for reference
 
 | Preset name | Category | Features | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `"minimal"` | observation | n + 1 | coverage + delivery rate |
 | `"standard"` | observation | n + 5 | coverage + rates + busy + mean_dt + pending (default) |
 | `"operational"` | observation | n + 3 | coverage + failed rate + busy + pending |

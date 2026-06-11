@@ -21,6 +21,7 @@ class StoreSnapshot:
     store_id: str
     x: float
     y: float
+    coverage_radius: float
 
 
 @dataclass(frozen=True)

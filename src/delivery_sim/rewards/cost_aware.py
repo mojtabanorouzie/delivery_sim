@@ -62,6 +62,7 @@ class CostAwareReward(RewardFunction):
         w_fail: float = 0.5,
         w_cost: float = 0.01,
     ) -> None:
+        """See class docstring for parameter descriptions."""
         self.delivery_reward = delivery_reward
         self.w_fail = w_fail
         self.w_cost = w_cost

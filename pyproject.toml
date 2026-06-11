@@ -27,6 +27,11 @@ dev = [
 render = [
     "pygame>=2.5",
 ]
+train = [
+    "stable-baselines3>=2.0",
+    "torch>=2.0",
+    "matplotlib>=3.7",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/delivery_sim"]
@@ -53,4 +58,8 @@ exclude = ["examples/"]
 
 [[tool.mypy.overrides]]
 module = ["gymnasium.*", "pettingzoo.*", "pygame.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["stable_baselines3.*", "torch.*", "matplotlib.*"]
 ignore_missing_imports = true
