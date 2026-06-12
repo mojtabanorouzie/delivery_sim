@@ -51,13 +51,26 @@ class WorldState:
         if not self.courier_index:
             self.courier_index = {c.courier_id: c for c in self.couriers}
 
-    def snapshot(self, tick: int, elapsed: float) -> WorldSnapshot:
+    def snapshot(
+        self,
+        tick: int,
+        elapsed: float,
+        *,
+        scenario_name: str = "",
+        demand_intensity: float = 0.0,
+        demand_pattern: str = "",
+    ) -> WorldSnapshot:
         """Produce an immutable ``WorldSnapshot`` at simulation time *elapsed*.
 
         Courier positions come from ``position_at(elapsed)`` (read-only analytic
         query); courier status strings come from ``courier_phase`` (not from
         ``courier.status``).  All tuples are sorted by entity id for stable
         ordering.  No mutable state is leaked or modified.
+
+        Args:
+            scenario_name:    Passed through from ScenarioConfig.name.
+            demand_intensity: Current normalised rate from the demand generator.
+            demand_pattern:   DemandGenerator class name (e.g. "PoissonDemandGenerator").
         """
         from delivery_sim.render.protocol import (
             CourierSnapshot,
@@ -67,7 +80,13 @@ class WorldState:
         )
 
         store_snaps = tuple(
-            StoreSnapshot(store_id=s.store_id, x=s.x, y=s.y, coverage_radius=s.coverage_radius)
+            StoreSnapshot(
+                store_id=s.store_id,
+                x=s.x,
+                y=s.y,
+                coverage_radius=s.coverage_radius,
+                queue_depth=s.queue_depth,
+            )
             for s in sorted(self.stores, key=lambda s: s.store_id)
         )
         courier_snaps = tuple(
@@ -95,4 +114,7 @@ class WorldState:
             stores=store_snaps,
             couriers=courier_snaps,
             orders=order_snaps,
+            scenario_name=scenario_name,
+            demand_intensity=demand_intensity,
+            demand_pattern=demand_pattern,
         )

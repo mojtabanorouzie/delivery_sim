@@ -1,0 +1,52 @@
+# Light scenario — low demand, ample fleet.
+#
+# Designed so delivery_rate > balanced > heavy (B10 preset ordering test).
+#
+# Capacity analysis (speed=1.5, store at 500,500, world 1000x1000):
+#   mean leg distance (center store): ~480 units
+#   cycle = 2*(480/1.5) + 30 prep = 640 + 30 = 670s
+#   demand = 0.008 orders/s
+#   throughput (20 couriers) = 20/670 = 0.030 orders/s
+#   demand/throughput = 0.008/0.030 = 0.27x  (fleet far over capacity → very low queue)
+#
+# Expected KPIs (seed=42, horizon=4000s):
+#   delivery_rate     > 0.90
+#   mean_delivery_time < 800s
+#   courier_utilization < 0.30
+#   return_rate       = 0.0
+
+name: light
+seed: 42
+dt: 1.0
+max_steps: 4000
+
+world:
+  width: 1000.0
+  height: 1000.0
+
+stores:
+  - name: store_a
+    x: 500.0
+    y: 500.0
+    capacity: 20
+    prep_time: 30.0
+    coverage_radius: 900.0
+
+couriers:
+  - courier_type: BikeCourier
+    count: 20
+    speed: 1.5
+
+demand:
+  generator_type: PoissonDemandGenerator
+  rate: 0.008
+
+routing:
+  model_type: euclidean
+
+reward:
+  function_type: SparseDeliveryReward
+
+return_rate: 0.0
+decision_interval: 100.0
+max_coverage_radius: 1000.0

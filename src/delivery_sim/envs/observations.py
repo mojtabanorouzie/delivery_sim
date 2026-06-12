@@ -144,7 +144,8 @@ class MinimalObservation(ObservationSpec):
         """Return n + 1 float32 vector: normalised coverage + interval delivery rate."""
         coverage = np.clip(
             np.array(
-                [s.coverage_radius / max_r for s in world.stores],                  dtype=np.float32,
+                [s.coverage_radius / max_r for s in world.stores],
+                dtype=np.float32,
             ),
             0.0,
             1.0,
@@ -196,7 +197,8 @@ class StandardObservation(ObservationSpec):
         """Return n + 5 float32 vector: coverage + rates + busy + mean_dt + pending."""
         coverage = np.clip(
             np.array(
-                [s.coverage_radius / max_r for s in world.stores],                  dtype=np.float32,
+                [s.coverage_radius / max_r for s in world.stores],
+                dtype=np.float32,
             ),
             0.0,
             1.0,
@@ -267,7 +269,8 @@ class OperationalObservation(ObservationSpec):
         """Return n + 3 float32 vector: coverage + failed rate + busy + pending."""
         coverage = np.clip(
             np.array(
-                [s.coverage_radius / max_r for s in world.stores],                  dtype=np.float32,
+                [s.coverage_radius / max_r for s in world.stores],
+                dtype=np.float32,
             ),
             0.0,
             1.0,

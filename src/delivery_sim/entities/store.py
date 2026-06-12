@@ -17,6 +17,7 @@ Design note — RoutingModel injection asymmetry:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections import deque
 
 from delivery_sim.registry import register
 from delivery_sim.routing.base import RoutingModel
@@ -81,6 +82,44 @@ class Store(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def complete_preparation(self, order_id: str) -> None:
+        """Free the prep slot held by *order_id*.
+
+        Called by the Simulator in _handle_order_ready immediately before
+        dequeue_next_waiter(), so the freed slot is available to the next waiter.
+        Idempotent: a missing order_id is silently ignored.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def enqueue_waiter(
+        self, courier_id: str, order_id: str, arrived_at: float
+    ) -> None:
+        """Add a courier to the overflow queue because all prep slots were full.
+
+        Each entry is stamped with a monotonic enqueue_seq counter so that
+        same-sim_time arrivals always dequeue in a fully deterministic order
+        (FIFO by counter, not by Python dict/set iteration order).
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def dequeue_next_waiter(self) -> tuple[str, str, float] | None:
+        """Pop the next waiter and return (courier_id, order_id, arrived_at).
+
+        Returns None when the queue is empty.  Called only after
+        complete_preparation() has freed a slot, so can_prepare() is True
+        immediately after this call returns a non-None value.
+        """
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def queue_depth(self) -> int:
+        """Number of couriers currently waiting for a prep slot."""
+        raise NotImplementedError
+
+    @abstractmethod
     def reset(self) -> None:
         """Reset all preparation state for a new episode."""
         raise NotImplementedError
@@ -100,6 +139,11 @@ class BuiltinStore(Store):
     ``routing.distance(...) >= 0 > negative_radius`` — but it is not a
     meaningful operational state.  The config schema enforces ``>= 0`` at
     parse time; runtime mutations are the caller's responsibility.
+
+    Queue determinism: _waiting holds 4-tuples (enqueue_seq, courier_id,
+    order_id, arrived_at).  enqueue_seq is a per-store monotonic counter so
+    same-sim_time arrivals always dequeue in insertion order regardless of
+    courier_id sort order or event-queue internals.
     """
 
     def __init__(
@@ -118,6 +162,9 @@ class BuiltinStore(Store):
         self.prep_time = prep_time
         self._coverage_radius: float = coverage_radius
         self._active_orders: dict[str, float] = {}
+        # Each entry: (enqueue_seq, courier_id, order_id, arrived_at)
+        self._waiting: deque[tuple[int, str, str, float]] = deque()
+        self._enqueue_seq: int = 0
 
     @property
     def store_id(self) -> str:
@@ -148,23 +195,43 @@ class BuiltinStore(Store):
         return routing.distance(self._x, self._y, point_x, point_y) <= self._coverage_radius
 
     def can_prepare(self, order_id: str) -> bool:
-        """Return True iff active-order count is strictly below capacity.
-
-        The check is inclusive: exactly ``capacity`` concurrent orders are
-        allowed; the (capacity+1)-th call returns False.
-        """
+        """Return True iff active-order count is strictly below capacity."""
         return len(self._active_orders) < self.capacity
 
     def start_preparation(self, order_id: str, sim_time: float) -> float:
         """Record *order_id* as active and return its estimated pick-up time.
 
-        Returns ``sim_time + prep_time``.  Does not guard against exceeding
-        capacity — callers should check ``can_prepare`` first.
+        Returns ``sim_time + prep_time``.  Callers must check ``can_prepare``
+        first; this method does not enforce the capacity limit.
         """
         pickup_time = sim_time + self.prep_time
         self._active_orders[order_id] = pickup_time
         return pickup_time
 
+    def complete_preparation(self, order_id: str) -> None:
+        """Free the prep slot for *order_id*.  Idempotent."""
+        self._active_orders.pop(order_id, None)
+
+    def enqueue_waiter(
+        self, courier_id: str, order_id: str, arrived_at: float
+    ) -> None:
+        """Append to the FIFO overflow queue with a deterministic sequence stamp."""
+        self._waiting.append((self._enqueue_seq, courier_id, order_id, arrived_at))
+        self._enqueue_seq += 1
+
+    def dequeue_next_waiter(self) -> tuple[str, str, float] | None:
+        """Pop the earliest waiter; returns (courier_id, order_id, arrived_at) or None."""
+        if not self._waiting:
+            return None
+        _seq, courier_id, order_id, arrived_at = self._waiting.popleft()
+        return courier_id, order_id, arrived_at
+
+    @property
+    def queue_depth(self) -> int:
+        return len(self._waiting)
+
     def reset(self) -> None:
-        """Clear all in-progress orders for a fresh episode."""
+        """Clear all in-progress and waiting state for a fresh episode."""
         self._active_orders.clear()
+        self._waiting.clear()
+        self._enqueue_seq = 0

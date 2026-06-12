@@ -1,0 +1,52 @@
+# Balanced preset — moderate demand, standard fleet.
+#
+# Designed to sit between light and heavy for all four B10 KPI inequalities.
+# Uses a single central store (vs. balanced.yaml's two-store setup) so that
+# the preset comparison is apples-to-apples with light and heavy.
+#
+# Capacity analysis (speed=1.5, store at 500,500, world 1000x1000):
+#   cycle = 2*(480/1.5) + 30 = 670s
+#   demand = 0.022 orders/s
+#   throughput (20 couriers) = 20/670 = 0.030 orders/s
+#   demand/throughput = 0.022/0.030 = 0.73x  (below capacity, mild queue)
+#
+# Expected KPIs:
+#   delivery_rate     in [0.75, 0.90]   (between light and heavy)
+#   mean_delivery_time > light, < heavy
+#   courier_utilization ~0.50
+
+name: balanced_preset
+seed: 42
+dt: 1.0
+max_steps: 4000
+
+world:
+  width: 1000.0
+  height: 1000.0
+
+stores:
+  - name: store_a
+    x: 500.0
+    y: 500.0
+    capacity: 20
+    prep_time: 30.0
+    coverage_radius: 900.0
+
+couriers:
+  - courier_type: BikeCourier
+    count: 20
+    speed: 1.5
+
+demand:
+  generator_type: PoissonDemandGenerator
+  rate: 0.022
+
+routing:
+  model_type: euclidean
+
+reward:
+  function_type: SparseDeliveryReward
+
+return_rate: 0.0
+decision_interval: 100.0
+max_coverage_radius: 1000.0
