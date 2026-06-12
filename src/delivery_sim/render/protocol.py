@@ -22,6 +22,7 @@ class StoreSnapshot:
     x: float
     y: float
     coverage_radius: float
+    queue_depth: int = 0
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,9 @@ class WorldSnapshot:
     stores: tuple[StoreSnapshot, ...]
     couriers: tuple[CourierSnapshot, ...]
     orders: tuple[OrderSnapshot, ...]
+    scenario_name: str = ""
+    demand_intensity: float = 0.0
+    demand_pattern: str = ""   # generator_type string, e.g. "PoissonDemandGenerator"
 
 
 @runtime_checkable

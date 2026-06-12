@@ -10,7 +10,7 @@ against the registry at engine initialisation time, not here.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class WorldConfig(BaseModel):
@@ -27,6 +27,7 @@ class StoreConfig(BaseModel):
     x: float
     y: float
     capacity: int = 10
+    prep_time: float = Field(default=30.0, gt=0.0)
     coverage_radius: float = Field(default=500.0, ge=0.0)
 
 
@@ -40,11 +41,38 @@ class CourierConfig(BaseModel):
     cost_per_unit: float = 0.01
 
 
+class ProfileBreakpoint(BaseModel):
+    """One (time_fraction, rate_factor) point in a DailyProfileDemandGenerator profile.
+
+    time_fraction is a fraction of the episode duration in [0.0, 1.0].
+    rate_factor is a non-negative multiplier on the effective_rate at that time.
+    """
+
+    time_fraction: float = Field(ge=0.0, le=1.0)
+    rate_factor: float = Field(ge=0.0)
+
+
 class DemandConfig(BaseModel):
     """Configuration for the demand generator."""
 
     generator_type: str
     rate: float = 1.0
+    # B-realistic additions (all defaulted; existing YAMLs load unchanged):
+    intensity: float = Field(default=1.0, gt=0.0)
+    profile: list[ProfileBreakpoint] = Field(default_factory=list)
+    burst_rate_factor: float = Field(default=5.0, gt=1.0)
+    burst_duration_fraction: float = Field(default=0.1, gt=0.0, lt=1.0)
+    burst_interval_fraction: float = Field(default=0.3, gt=0.0, lt=1.0)
+
+    @model_validator(mode="after")
+    def _burst_windows_dont_overlap(self) -> DemandConfig:
+        if self.burst_duration_fraction + self.burst_interval_fraction > 1.0:
+            raise ValueError(
+                "burst_duration_fraction + burst_interval_fraction must be <= 1.0 "
+                f"(got {self.burst_duration_fraction} + {self.burst_interval_fraction} "
+                f"= {self.burst_duration_fraction + self.burst_interval_fraction:.3f})"
+            )
+        return self
 
 
 class RoutingConfig(BaseModel):
@@ -89,4 +117,14 @@ class ScenarioConfig(BaseModel):
     observation_preset: str = Field(
         default="standard",
         description="Named ObservationSpec preset (see delivery_sim.envs.observations)",
+    )
+    return_rate: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Probability that a courier's delivery attempt is refused at the door. "
+            "0.0 = no returns (default, preserves pre-B-realistic behavior). "
+            "Values above ~0.05 are unrealistic; 1.0 is test-only."
+        ),
     )

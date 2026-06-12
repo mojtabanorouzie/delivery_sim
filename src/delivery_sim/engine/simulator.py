@@ -79,12 +79,13 @@ class Simulator:
         self._renderer: SnapshotConsumer | None = None
         self._collector: KPICollector | None = None
         self._gen_rng: np.random.Generator | None = None
+        self._returns_rng: np.random.Generator | None = None  # child[1] of SeedSequence
         self._demand_generator: DemandGenerator | None = None
         self._routing: RoutingModel | None = None
         self._order_counter: int = 0
         self._horizon: float = 0.0
-        # Per-order accumulated delivery cost (both legs); cleared each reset().
-        # Used to pass exact cost to the collector at delivery time.
+        # Per-order accumulated delivery cost (both legs + optional return leg).
+        # Cleared each reset().  Popped by _on_order_terminal at every terminal event.
         self._order_leg_cost: dict[str, float] = {}
 
     def attach_renderer(self, renderer: SnapshotConsumer) -> None:
@@ -119,6 +120,8 @@ class Simulator:
         if self._collector is not None:
             if order.status == OrderStatus.DELIVERED:
                 self._collector.on_order_delivered(order, sim_time, cost)
+            elif order.status == OrderStatus.RETURNED:
+                self._collector.on_order_returned(order, sim_time, cost)
             else:
                 self._collector.on_order_failed(order, sim_time)
 
@@ -134,9 +137,14 @@ class Simulator:
         self._order_counter = 0
         self._order_leg_cost.clear()
 
-        # One child stream for the demand generator (sole consumer)
-        (gen_seed,) = np.random.SeedSequence(self.config.seed).spawn(1)
+        # Spawn two child streams.
+        # index 0 → gen_rng    (demand generator, sole consumer)
+        # index 1 → returns_rng (return decision in _handle_courier_arrived_customer)
+        # spawn(2)[0] produces the same entropy as spawn(1)[0] so existing scenarios
+        # with return_rate=0.0 preserve their full KPI fingerprint.
+        gen_seed, returns_seed = np.random.SeedSequence(self.config.seed).spawn(2)
         self._gen_rng = np.random.default_rng(gen_seed)
+        self._returns_rng = np.random.default_rng(returns_seed)
 
         # Routing model
         self._routing = create("routing", self.config.routing.model_type)
@@ -150,6 +158,7 @@ class Simulator:
                 x=sc.x,
                 y=sc.y,
                 capacity=sc.capacity,
+                prep_time=sc.prep_time,
                 coverage_radius=sc.coverage_radius,
             )
             s.reset()
@@ -174,6 +183,10 @@ class Simulator:
                 couriers.append(c)
                 cid += 1
 
+        # Horizon must be computed before demand generator reset so time-varying
+        # generators can validate and store it (V-3 reproducibility requirement).
+        self._horizon = self.config.max_steps * self.config.dt
+
         # Demand generator
         self._demand_generator = create(
             "demand_generator", self.config.demand.generator_type,
@@ -182,8 +195,13 @@ class Simulator:
             world_width=self.config.world.width,
             world_height=self.config.world.height,
             store_ids=[s.store_id for s in stores],
+            intensity=self.config.demand.intensity,
+            profile=self.config.demand.profile,
+            burst_rate_factor=self.config.demand.burst_rate_factor,
+            burst_duration_fraction=self.config.demand.burst_duration_fraction,
+            burst_interval_fraction=self.config.demand.burst_interval_fraction,
         )
-        self._demand_generator.reset(self._gen_rng)
+        self._demand_generator.reset(self._gen_rng, horizon=self._horizon)
 
         # World state — courier_phase initialised to "free" for every courier
         self.world = WorldState(
@@ -194,9 +212,6 @@ class Simulator:
             active_orders={},
             courier_phase={c.courier_id: "free" for c in couriers},
         )
-
-        # Horizon: events at exactly horizon are never scheduled (strict <)
-        self._horizon = self.config.max_steps * self.config.dt
 
         # Seed the demand stream
         result = self._demand_generator.next_event(0.0, self._gen_rng)
@@ -294,7 +309,13 @@ class Simulator:
             # Emit observer snapshots at dt boundaries strictly before the event
             if consumer is not None:
                 while next_obs_t < next_ev.time and next_obs_t < horizon:
-                    consumer.consume(self.world.snapshot(obs_tick, next_obs_t))
+                    consumer.consume(self.world.snapshot(
+                        obs_tick, next_obs_t,
+                        scenario_name=self.config.name,
+                        demand_intensity=self._demand_generator.current_intensity(next_obs_t)
+                        if self._demand_generator is not None else 0.0,
+                        demand_pattern=self.config.demand.generator_type,
+                    ))
                     obs_tick += 1
                     next_obs_t += dt
 
@@ -305,7 +326,13 @@ class Simulator:
         # Sweep remaining observer ticks up to (not including) horizon
         if consumer is not None:
             while next_obs_t < horizon:
-                consumer.consume(self.world.snapshot(obs_tick, next_obs_t))
+                consumer.consume(self.world.snapshot(
+                    obs_tick, next_obs_t,
+                    scenario_name=self.config.name,
+                    demand_intensity=self._demand_generator.current_intensity(next_obs_t)
+                    if self._demand_generator is not None else 0.0,
+                    demand_pattern=self.config.demand.generator_type,
+                ))
                 obs_tick += 1
                 next_obs_t += dt
             consumer.close()
@@ -347,6 +374,8 @@ class Simulator:
             self._handle_order_ready(event)
         elif event.event_type == "courier_arrived_customer":
             self._handle_courier_arrived_customer(event)
+        elif event.event_type == "courier_returned_to_store":
+            self._handle_courier_returned_to_store(event)
 
     # ------------------------------------------------------------------
     # Event handlers
@@ -489,21 +518,27 @@ class Simulator:
         order = self.world.active_orders[order_id]
         store = self.world.store_index[store_id]
 
-        # Track store capacity; ready_time = sim_time + store.prep_time
-        ready_time = store.start_preparation(order_id, sim_time)
-
-        order.transition(OrderStatus.PREPARING, sim_time)
-        self.world.courier_phase[courier_id] = "at-store"
-
-        self.event_queue.push(Event(
-            time=ready_time, priority=_PRI_ARRIVAL,
-            event_type="order_ready",
-            payload={
-                "courier_id": courier_id,
-                "order_id": order_id,
-                "store_id": store_id,
-            },
-        ))
+        if store.can_prepare(order_id):
+            ready_time = store.start_preparation(order_id, sim_time)
+            order.transition(OrderStatus.PREPARING, sim_time)
+            self.world.courier_phase[courier_id] = "at-store"
+            self.event_queue.push(Event(
+                time=ready_time, priority=_PRI_ARRIVAL,
+                event_type="order_ready",
+                payload={
+                    "courier_id": courier_id,
+                    "order_id": order_id,
+                    "store_id": store_id,
+                },
+            ))
+            if self._collector is not None:
+                self._collector.on_order_queued_at_store(order_id, store_id, sim_time, queued=False)
+        else:
+            # All prep slots full — enqueue this courier; order stays ASSIGNED
+            store.enqueue_waiter(courier_id, order_id, arrived_at=sim_time)
+            self.world.courier_phase[courier_id] = "waiting-at-store"
+            if self._collector is not None:
+                self._collector.on_order_queued_at_store(order_id, store_id, sim_time, queued=True)
 
     def _handle_order_ready(self, event: Event) -> None:
         """Complete pickup and launch leg-2 (store → customer).
@@ -511,6 +546,10 @@ class Simulator:
         SETTLED proof: order_ready fires at ready_time = arrival_at_store +
         prep_time >= courier.arrival_time(), so the SETTLED precondition for
         leg-2 assign() always holds at this handler.
+
+        Queue drain: freeing a prep slot may unblock a waiting courier.
+        complete_preparation() is called first so can_prepare() is True when
+        start_preparation() is called for the next waiter.
         """
         assert self.world is not None
 
@@ -522,6 +561,32 @@ class Simulator:
         order = self.world.active_orders[order_id]
         store = self.world.store_index[store_id]
         courier = self.world.courier_index[courier_id]
+
+        # Free the prep slot before transitioning the current order
+        store.complete_preparation(order_id)
+
+        # Drain one waiting courier if any
+        waiter = store.dequeue_next_waiter()
+        if waiter is not None:
+            w_courier_id, w_order_id, w_arrived_at = waiter
+            w_order = self.world.active_orders[w_order_id]
+            wait_time = sim_time - w_arrived_at
+            w_ready_time = store.start_preparation(w_order_id, sim_time)
+            w_order.transition(OrderStatus.PREPARING, sim_time)
+            self.world.courier_phase[w_courier_id] = "at-store"
+            if self._collector is not None:
+                self._collector.on_order_dequeued_from_store(
+                    w_order_id, store_id, wait_time
+                )
+            self.event_queue.push(Event(
+                time=w_ready_time, priority=_PRI_ARRIVAL,
+                event_type="order_ready",
+                payload={
+                    "courier_id": w_courier_id,
+                    "order_id": w_order_id,
+                    "store_id": store_id,
+                },
+            ))
 
         order.transition(OrderStatus.PICKED_UP, sim_time)
         order.transition(OrderStatus.IN_TRANSIT, sim_time)
@@ -555,14 +620,79 @@ class Simulator:
 
     def _handle_courier_arrived_customer(self, event: Event) -> None:
         assert self.world is not None
+        assert self._returns_rng is not None
 
         sim_time = self.clock.elapsed
         courier_id: str = event.payload["courier_id"]
         order_id: str = event.payload["order_id"]
 
+        # Return-decision draw — FIXED POSITION, SOLE CONSUMER of _returns_rng.
+        # One draw per event, always here, before any entity lookup or mutation.
+        # Fast path (rate == 0.0) does not consume returns_rng at all.
+        refused = (
+            self._returns_rng.random() < self.config.return_rate
+            if self.config.return_rate > 0.0
+            else False
+        )
+
         order = self.world.active_orders[order_id]
-        order.transition(OrderStatus.DELIVERED, sim_time)
+        courier = self.world.courier_index[courier_id]
+
+        if not refused:
+            order.transition(OrderStatus.DELIVERED, sim_time)
+            self.world.courier_phase[courier_id] = "free"
+            self._on_order_terminal(order, sim_time)
+            if self._collector is not None:
+                self._collector.on_courier_free(courier_id, sim_time)
+        else:
+            assert self._routing is not None
+            return_store = self.world.store_index[order.store_id]
+
+            # Accumulate return-leg cost BEFORE _on_order_terminal pops the entry
+            return_dist = self._routing.distance(
+                order.customer_x, order.customer_y,
+                return_store.x, return_store.y,
+            )
+            self._order_leg_cost[order_id] = (
+                self._order_leg_cost.get(order_id, 0.0) + courier.cost(return_dist)
+            )
+
+            order.transition(OrderStatus.RETURNED, sim_time)
+            self._on_order_terminal(order, sim_time)
+
+            # Assign return leg: courier travels from customer back to store
+            courier.assign(
+                order_id=order_id,
+                store_id=order.store_id,
+                sim_time=sim_time,
+                target_x=return_store.x,
+                target_y=return_store.y,
+                from_x=order.customer_x,
+                from_y=order.customer_y,
+            )
+            self.world.courier_phase[courier_id] = "returning"
+
+            eta = courier.arrival_time()
+            assert eta is not None
+            self.event_queue.push(Event(
+                time=eta, priority=_PRI_ARRIVAL,
+                event_type="courier_returned_to_store",
+                payload={
+                    "courier_id": courier_id,
+                    "order_id": order_id,
+                    "store_id": order.store_id,
+                },
+            ))
+
+    def _handle_courier_returned_to_store(self, event: Event) -> None:
+        """Courier completed the return leg; free them for new assignments."""
+        assert self.world is not None
+
+        sim_time = self.clock.elapsed
+        courier_id: str = event.payload["courier_id"]
+        order_id: str = event.payload["order_id"]
+
         self.world.courier_phase[courier_id] = "free"
-        self._on_order_terminal(order, sim_time)
         if self._collector is not None:
             self._collector.on_courier_free(courier_id, sim_time)
+            self._collector.on_courier_returned_to_store(courier_id, order_id, sim_time)

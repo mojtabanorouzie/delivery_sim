@@ -24,6 +24,7 @@ class OrderStatus(Enum):
     IN_TRANSIT = auto()
     DELIVERED = auto()
     FAILED = auto()
+    RETURNED = auto()  # courier reached customer but delivery was refused at the door
 
 
 # Explicit allowed-transition map. Any transition not listed here is illegal.
@@ -32,9 +33,11 @@ ALLOWED_TRANSITIONS: dict[OrderStatus, frozenset[OrderStatus]] = {
     OrderStatus.ASSIGNED: frozenset({OrderStatus.PREPARING, OrderStatus.FAILED}),
     OrderStatus.PREPARING: frozenset({OrderStatus.PICKED_UP, OrderStatus.FAILED}),
     OrderStatus.PICKED_UP: frozenset({OrderStatus.IN_TRANSIT, OrderStatus.FAILED}),
-    OrderStatus.IN_TRANSIT: frozenset({OrderStatus.DELIVERED, OrderStatus.FAILED}),
+    OrderStatus.IN_TRANSIT: frozenset({OrderStatus.DELIVERED, OrderStatus.FAILED,
+                                        OrderStatus.RETURNED}),
     OrderStatus.DELIVERED: frozenset(),
     OrderStatus.FAILED: frozenset(),
+    OrderStatus.RETURNED: frozenset(),  # terminal — courier carries order back to store
 }
 
 
@@ -75,5 +78,5 @@ class Order:
 
     @property
     def is_terminal(self) -> bool:
-        """True if the order has reached a terminal state (DELIVERED or FAILED)."""
-        return self.status in (OrderStatus.DELIVERED, OrderStatus.FAILED)
+        """True if the order has reached a terminal state (DELIVERED, FAILED, or RETURNED)."""
+        return self.status in (OrderStatus.DELIVERED, OrderStatus.FAILED, OrderStatus.RETURNED)

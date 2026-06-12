@@ -68,6 +68,16 @@ class KPICollector:
         self._courier_total_busy: float = 0.0
         # Set by finalize()
         self._courier_utilization: float = 0.0
+        # Store queue tracking (B5)
+        self._store_queue_entries: dict[str, float] = {}  # order_id → queued_at
+        self._store_wait_times: list[float] = []
+        self._max_store_queue_depth: int = 0
+        # Return tracking (B7)
+        self._returned_orders: int = 0
+        self._return_total_cost: float = 0.0
+        # order_id → sim_time when the courier arrived customer (start of return leg)
+        self._return_leg_starts: dict[str, float] = {}
+        self._return_leg_times: list[float] = []
 
     # ------------------------------------------------------------------
     # Notification methods — called by Simulator at event timestamps
@@ -107,6 +117,71 @@ class KPICollector:
     def on_order_failed(self, order: Order, sim_time: float) -> None:  # noqa: ARG002
         """Record an order that reached the FAILED terminal state."""
         self._failed_orders += 1
+
+    def on_order_returned(
+        self,
+        order: Order,
+        sim_time: float,
+        cost: float,
+    ) -> None:
+        """Record an order refused at the customer's door (RETURNED terminal state).
+
+        Records the return event and stamps *sim_time* as the start of the
+        return leg so on_courier_returned_to_store can compute leg duration.
+        """
+        self._returned_orders += 1
+        self._return_total_cost += cost
+        # Stamp return-leg start time keyed by order_id for later completion.
+        self._return_leg_starts[order.order_id] = sim_time
+
+    def on_courier_returned_to_store(
+        self,
+        courier_id: str,  # noqa: ARG002
+        order_id: str,
+        sim_time: float,
+    ) -> None:
+        """Record the moment a returning courier arrives back at the store.
+
+        Computes the return-leg travel time from the stamp written in
+        on_order_returned and appends it to _return_leg_times.
+        """
+        start = self._return_leg_starts.pop(order_id, None)
+        if start is not None:
+            self._return_leg_times.append(sim_time - start)
+
+    # ------------------------------------------------------------------
+    # Store queue notifications (B5)
+    # ------------------------------------------------------------------
+
+    def on_order_queued_at_store(
+        self,
+        order_id: str,
+        store_id: str,  # noqa: ARG002
+        sim_time: float,
+        queued: bool = False,
+    ) -> None:
+        """Called when a courier arrives at a store.
+
+        queued=True  → courier entered the overflow queue (slot was full).
+        queued=False → courier went straight to a prep slot (no wait).
+        Only queued=True entries contribute to wait-time and depth metrics.
+        """
+        if not queued:
+            return
+        self._store_queue_entries[order_id] = sim_time
+        depth = len(self._store_queue_entries)
+        if depth > self._max_store_queue_depth:
+            self._max_store_queue_depth = depth
+
+    def on_order_dequeued_from_store(
+        self,
+        order_id: str,
+        store_id: str,  # noqa: ARG002
+        wait_time: float,
+    ) -> None:
+        """Called when a queued courier is dequeued and prep starts."""
+        self._store_queue_entries.pop(order_id, None)
+        self._store_wait_times.append(wait_time)
 
     def on_courier_busy(self, courier_id: str, sim_time: float) -> None:
         """Record that *courier_id* transitioned from free → non-free at *sim_time*."""
@@ -165,13 +240,20 @@ class KPICollector:
             else 0.0
         )
 
+        terminal = self._delivered_orders + self._failed_orders + self._returned_orders
         return {
             "total_orders": self._total_orders,
             "delivered_orders": self._delivered_orders,
             "failed_orders": self._failed_orders,
+            "returned_orders": self._returned_orders,
             "delivery_rate": (
                 self._delivered_orders / self._total_orders
                 if self._total_orders > 0
+                else 0.0
+            ),
+            "return_rate": (
+                self._returned_orders / terminal
+                if terminal > 0
                 else 0.0
             ),
             "mean_delivery_time": mean_dt,
@@ -181,6 +263,17 @@ class KPICollector:
             "courier_utilization": self._courier_utilization,
             "total_delivery_cost": self._total_delivery_cost,
             "sla_violations": self._sla_violations,
+            # Store queue metrics (B5)
+            "mean_store_wait_time": (
+                float(np.mean(np.asarray(self._store_wait_times, dtype=float)))
+                if self._store_wait_times else 0.0
+            ),
+            "max_store_queue_depth": self._max_store_queue_depth,
+            # Return metrics (B7)
+            "mean_return_leg_time": (
+                float(np.mean(np.asarray(self._return_leg_times, dtype=float)))
+                if self._return_leg_times else 0.0
+            ),
         }
 
     def as_dict(self) -> dict[str, float | int]:
@@ -199,6 +292,15 @@ class KPICollector:
         self._courier_busy_since = {}
         self._courier_total_busy = 0.0
         self._courier_utilization = 0.0
+        # Store queue (B5)
+        self._store_queue_entries = {}
+        self._store_wait_times = []
+        self._max_store_queue_depth = 0
+        # Returns (B7)
+        self._returned_orders = 0
+        self._return_total_cost = 0.0
+        self._return_leg_starts = {}
+        self._return_leg_times = []
 
 
 @dataclass
